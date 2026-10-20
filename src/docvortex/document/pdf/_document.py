@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
-from typing import Iterator, Literal, cast
+from typing import Any, Iterator, Literal, cast
 from weakref import WeakValueDictionary
 
 import pypdfium2 as pdfium
@@ -279,26 +279,27 @@ class PDFPage:
     def get_char_count(self) -> int:
         return self.pdf_doc.page_char_count(self._idx)
 
-    def get_chars(self) -> list[Char]:
-        return self.pdf_doc.get_page_chars(self._idx)
+    def get_chars(self, *, visible_only: bool = False) -> list[Char]:
+        """Read raw characters, or opt into clipping/paint-aware evidence."""
+        return self.pdf_doc.get_page_chars(self._idx, visible_only=visible_only)
 
-    def get_chars_with_geometry(self) -> PDFPageTextGeometry:
-        """一次读取字符及 Hybrid TXT 匹配所需的额外几何。"""
-        return self.pdf_doc.get_page_chars_with_geometry(self._idx)
+    def get_chars_with_geometry(self, *, visible_only: bool = False) -> PDFPageTextGeometry:
+        """Read consistent character geometry, optionally restricted to visible ink."""
+        return self.pdf_doc.get_page_chars_with_geometry(self._idx, visible_only=visible_only)
 
-    def get_text_snapshot(self):
-        """仅获取独立原生文本证据，不提前解析路径或链接；参考后端返回None。"""
+    def get_text_snapshot(self, *, visible_only: bool = False) -> Any | None:
+        """Read an owned text snapshot without vectors or links; reference mode returns None."""
         from ..._compute_backend import get_native
 
         native = get_native()
         if native is None or not hasattr(native, "NativeTextSnapshot"):
             return None
-        text = self.pdf_doc._get_owned_text_snapshot(self._idx, visible_only=False)
+        text = self.pdf_doc._get_owned_text_snapshot(self._idx, visible_only=visible_only)
         return text if isinstance(text, native.NativeTextSnapshot) else None
 
-    def get_snapshot(self) -> PDFPageSnapshot:
-        """一次打开页面取得共享证据，快照可在文档关闭后继续使用。"""
-        return self.pdf_doc.get_page_snapshot(self._idx)
+    def get_snapshot(self, *, visible_only: bool = False) -> PDFPageSnapshot:
+        """Read detached evidence; raw and visible snapshots have separate cache identities."""
+        return self.pdf_doc.get_page_snapshot(self._idx, visible_only=visible_only)
 
     def get_drawing_lines(self) -> list[PDFDrawingLine]:
         """读取当前页已规范到视觉页面坐标的横竖 drawing。"""
@@ -345,7 +346,7 @@ class PDFDocument:
         self._render_session_lock = threading.Lock()
         self._classification: Literal["ocr", "txt"] | None = None
         self._snapshot_owner = object()
-        self._page_snapshots: WeakValueDictionary[int, PDFPageSnapshot] = WeakValueDictionary()
+        self._page_snapshots: WeakValueDictionary[tuple[int, bool], PDFPageSnapshot] = WeakValueDictionary()
         self._owned_text_snapshots: WeakValueDictionary = WeakValueDictionary()
         if isinstance(pdf_bytes_or_path, bytes):
             self._pdf_bytes: bytes = pdf_bytes_or_path
@@ -622,12 +623,13 @@ class PDFDocument:
                 self._page_char_counts[page_idx] = n_chars
         return cast(int, n_chars)
 
-    def get_page_chars(self, page_idx: int) -> list[Char]:
-        return self._get_page_text_geometry(page_idx, include_extended_geometry=False).chars
+    def get_page_chars(self, page_idx: int, *, visible_only: bool = False) -> list[Char]:
+        """Read raw text by default; visible-only excludes unpainted and fully clipped glyphs."""
+        return self._get_page_text_geometry(page_idx, include_extended_geometry=False, visible_only=visible_only).chars
 
-    def get_page_chars_with_geometry(self, page_idx: int) -> PDFPageTextGeometry:
-        """一次读取字符、tight bbox 和字符原点，避免 Hybrid 重复打开 textpage。"""
-        return self._get_page_text_geometry(page_idx, include_extended_geometry=True)
+    def get_page_chars_with_geometry(self, page_idx: int, *, visible_only: bool = False) -> PDFPageTextGeometry:
+        """Read text and its matching geometry using the same visibility policy."""
+        return self._get_page_text_geometry(page_idx, include_extended_geometry=True, visible_only=visible_only)
 
     def _get_page_text_paint(self, page_idx: int, char_indices: Sequence[int]) -> dict[int, tuple[int, int, int, int]]:
         """仅为可疑短文字读取原生绘制颜色；页面和文字句柄在共享锁内及时释放，不改变字符或公开输出。"""
@@ -691,10 +693,10 @@ class PDFDocument:
             with self._open_page(page_idx) as page:
                 return self._extract_owned_text_snapshot(page_idx, page, visible_only=visible_only, reference=False)
 
-    def get_page_snapshot(self, page_idx: int) -> PDFPageSnapshot:
-        """同页显式快照在消费者存活期间复用，弱缓存不延长全文证据的驻留时间。"""
+    def get_page_snapshot(self, page_idx: int, *, visible_only: bool = False) -> PDFPageSnapshot:
+        """Cache detached page evidence separately for raw and visible text policies."""
         with pdfium_guard():
-            cached = self._page_snapshots.get(page_idx)
+            cached = self._page_snapshots.get((page_idx, visible_only))
             if cached is not None:
                 return cached
             with self._open_page(page_idx) as page:
@@ -705,7 +707,7 @@ class PDFDocument:
                     rotation = 0
                 rotation = rotation if rotation in {0, 90, 180, 270} else 0
                 drawings, paths = _extract_page_paths_and_lines(page, bbox, rotation)
-                text = self._extract_owned_text_snapshot(page_idx, page, visible_only=False)
+                text = self._extract_owned_text_snapshot(page_idx, page, visible_only=visible_only)
                 native_text = None if isinstance(text, PDFPageTextGeometry) else text
                 snapshot = PDFPageSnapshot(
                     page_idx,
@@ -717,7 +719,7 @@ class PDFDocument:
                     self._snapshot_owner,
                     native_text,
                 )
-            self._page_snapshots[page_idx] = snapshot
+            self._page_snapshots[(page_idx, visible_only)] = snapshot
             return snapshot
 
     def _extract_native_page(self, page_idx: int) -> _PDFPageSnapshot:
@@ -778,9 +780,17 @@ class PDFDocument:
         page_idx: int,
         *,
         include_extended_geometry: bool,
+        visible_only: bool = False,
     ) -> PDFPageTextGeometry:
-        """在同一 PDFium textpage 生命周期内物化字符及可选扩展几何。"""
+        """Materialize characters and side maps together under the requested visibility policy."""
         with self._open_page(page_idx) as page:
+            if visible_only:
+                return _extract_page_text_geometry(
+                    page,
+                    include_extended_geometry=include_extended_geometry,
+                    visible_only=True,
+                    paint_page_reader=lambda: self._get_form_resource_page(page_idx),
+                )
             return _extract_page_text_geometry(page, include_extended_geometry=include_extended_geometry)
 
     def get_page_lines(self, page_idx: int) -> list[Line]:

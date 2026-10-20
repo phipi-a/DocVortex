@@ -50,7 +50,7 @@ def test_pdf_page_exposes_chars_with_geometry_without_raw_pdfium_access() -> Non
     document.get_page_chars_with_geometry.return_value = expected
 
     assert pdf_document.PDFPage(document, 4).get_chars_with_geometry() is expected
-    document.get_page_chars_with_geometry.assert_called_once_with(4)
+    document.get_page_chars_with_geometry.assert_called_once_with(4, visible_only=False)
 
 
 def _build_drawing_pdf() -> bytes:

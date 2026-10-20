@@ -101,3 +101,29 @@ def test_fully_hidden_layer_does_not_create_flash_text_blocks() -> None:
         assert "invisible" in "".join(char["char"] for char in pdf.get_page_chars(0))
         model = PdfModel().predict(pdf)
         assert not any(block["type"] in {"text", "paragraph_title", "equation", "table"} for block in model[0])
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("form_rotation", [0, 90])
+def test_public_visible_text_interfaces_share_clipping_policy(rotation: int, form_rotation: int) -> None:
+    """Visible snapshots filter nested clips without poisoning raw snapshot caches."""
+    with PDFDocument(_visibility_pdf(rotation, form_rotation)) as pdf:
+        page = pdf[0]
+        raw = page.get_snapshot()
+        visible = page.get_snapshot(visible_only=True)
+        assert raw is page.get_snapshot()
+        assert visible is page.get_snapshot(visible_only=True)
+        assert raw is not visible
+        expected = "".join(c["char"] for c in visible.text_geometry.chars)
+        assert expected == "".join(c["char"] for c in page.get_chars(visible_only=True))
+        assert expected == "".join(c["char"] for c in page.get_chars_with_geometry(visible_only=True).chars)
+        assert expected == "".join(c["char"] for c in pdf.get_page_chars(0, visible_only=True))
+        owner = page.get_text_snapshot(visible_only=True)
+        if owner is not None:
+            assert expected == "".join(c["char"] for c in owner.materialize_geometry().chars)
+            assert owner is not page.get_text_snapshot()
+        assert "OUTSIDE" in "".join(c["char"] for c in raw.text_geometry.chars)
+        assert "OUTSIDE" not in expected
+        # The fixture's M crosses the outer Form boundary: retain its visible part.
+        assert "M" in expected
+    assert expected == "".join(c["char"] for c in visible.text_geometry.chars)
