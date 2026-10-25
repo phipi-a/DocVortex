@@ -312,11 +312,6 @@ PUBLIC_API: dict[str, tuple[str, ...]] = {
         "render_markdown",
         "render_single_block",
     ),
-    "docvortex.render.pure_markdown": (
-        "MarkdownEdit",
-        "PureMarkdown",
-        "convert_to_pure_markdown",
-    ),
     "docvortex.render.pdf": ("render_pdf",),
     "docvortex.render.structured_content": ("render_structured_content",),
     "docvortex.result": (

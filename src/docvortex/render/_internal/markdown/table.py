@@ -10,6 +10,7 @@ from bs4.element import NavigableString, Tag
 
 from ....options import LatexDelimitersConfig
 from .assets import prefix_html_image_sources
+from .dialect import is_pure_markdown
 from .inline import markdown_styles_require_html, render_styled_markdown_text
 
 _INLINE_EQ_RE = re.compile(r"<eq>(?P<latex>.*?)</eq>", re.IGNORECASE | re.DOTALL)
@@ -82,18 +83,21 @@ def render_html_table(
     asset_base_url: str,
     delimiters: LatexDelimitersConfig,
 ) -> str | None:
-    """将 HTML table 按复杂度输出原 HTML 或转换为 GFM 表格。"""
+    """将 HTML table 按复杂度输出原 HTML 或转换为 GFM 表格；纯 Markdown 模式拍平复杂表格。"""
     prefixed = prefix_html_image_sources(content, asset_base_url)
     soup = BeautifulSoup(prefixed, "html.parser")
     tables = soup.find_all("table")
     if not tables:
         return None
     table = tables[0]
-    if len(tables) != 1 or _is_complex_table(table):
-        return format_embedded_html(prefixed, asset_base_url="", delimiters=delimiters).strip()
-    markdown = _convert_simple_table(table, delimiters)
-    if markdown is not None:
-        return markdown
+    if len(tables) == 1 and not _is_complex_table(table):
+        markdown = _convert_simple_table(table, delimiters)
+        if markdown is not None:
+            return markdown
+    if is_pure_markdown():
+        from .pure_html import html_to_pure_markdown
+
+        return html_to_pure_markdown(prefixed, delimiters).strip()
     return format_embedded_html(prefixed, asset_base_url="", delimiters=delimiters).strip()
 
 
@@ -198,7 +202,7 @@ def _render_inline_children(
         if name in {"p", "span"}:
             parts.append(rendered)
         elif name == "br":
-            parts.append("<br>")
+            parts.append(" " if is_pure_markdown() else "<br>")
         elif name == "code":
             parts.append(_render_inline_code(child.get_text()))
         elif name == "eq":
@@ -207,9 +211,9 @@ def _render_inline_children(
             parts.append(f"{delimiters.inline.left}{escaped_latex}{delimiters.inline.right}" if escaped_latex else "")
         elif name == "a":
             href = str(child.get("href", "")).strip()
-            if not href:
+            if not href or (is_pure_markdown() and href.startswith("#")):
                 parts.append(rendered)
-            elif _node_has_complex_text_style(child, inherited_styles):
+            elif not is_pure_markdown() and _node_has_complex_text_style(child, inherited_styles):
                 parts.append(f'<a href="{html.escape(href, quote=True)}">{rendered}</a>')
             else:
                 parts.append(f"[{rendered}]({_escape_link_url(href)})")

@@ -10,8 +10,13 @@ from ..common.index import strip_index_page_tail
 from ..common.list_items import has_markdown_unordered_marker, reference_list_needs_bullets
 from ..common.planner import PlannedBlock
 from ..common.anchors import visible_block_anchor
-from .assets import build_markdown_image, resolve_image_source
-from .escaping import escape_standalone_marker_rule, escape_text_block_markdown_prefix
+from .assets import build_markdown_image, prefix_html_image_sources, resolve_image_source
+from .dialect import is_pure_markdown
+from .escaping import (
+    escape_conservative_markdown_text,
+    escape_standalone_marker_rule,
+    escape_text_block_markdown_prefix,
+)
 from .inline import (
     render_inline_content,
     render_inline_spans,
@@ -19,6 +24,7 @@ from .inline import (
     render_internal_link,
     render_joined_inline_contents,
 )
+from .pure_html import html_to_pure_markdown
 from .table import _strip_embedded_images, format_embedded_html, render_html_table
 from ...contracts import ImageRenderer
 from ....schema import (
@@ -31,7 +37,10 @@ from ....schema import (
     CodeAnnotationBlock,
     CodeBlock,
     CodeBodyBlock,
+    CodeInlineSpan,
     DocTitleBlock,
+    EquationInlineSpan,
+    HyperlinkSpan,
     EquationBlock,
     ImageAnnotationBlock,
     ImageBlock,
@@ -48,6 +57,7 @@ from ....schema import (
     TableBlock,
     TableBodyBlock,
     TextBlock,
+    TextSpan,
 )
 
 _VALID_CODE_LANGUAGE_RE = re.compile(r"[A-Za-z0-9_.+#-]+")
@@ -108,8 +118,8 @@ def _claim_markdown_anchor(anchor: str | None, emitted_anchors: set[str] | None)
 
 
 def _prepend_markdown_anchor(content: str, anchor: str | None, emitted_anchors: set[str] | None) -> str:
-    """给非空 Markdown 正文添加独立 HTML anchor，避免污染正文文本。"""
-    if not content.strip():
+    """给非空 Markdown 正文添加独立 HTML anchor，避免污染正文文本；纯 Markdown 不输出 anchor。"""
+    if not content.strip() or is_pure_markdown():
         return content
     normalized = _claim_markdown_anchor(anchor, emitted_anchors)
     if not normalized:
@@ -127,6 +137,8 @@ def _render_page_footnote(
     rendered = escape_standalone_marker_rule(content)
     if not rendered.strip():
         return ""
+    if is_pure_markdown():
+        return rendered
     rendered = rendered.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
     attrs = [
         'class="docvortex-page-footnote"',
@@ -165,6 +177,8 @@ def _render_title(
     """渲染带可选 HTML anchor 的 Markdown 标题。"""
     level = min(max(block.level, 1), 6)
     title = f"{'#' * level} {render_title_inline_content(block, delimiters)}"
+    if is_pure_markdown():
+        return title
     anchor = _claim_markdown_anchor(visible_block_anchor(block), emitted_anchors)
     if not anchor:
         return title
@@ -241,7 +255,7 @@ def _render_index(
         if not label:
             continue
         anchor = (child.anchor or "").strip()
-        if anchor and (anchor_targets is None or anchor in anchor_targets):
+        if anchor and not is_pure_markdown() and (anchor_targets is None or anchor in anchor_targets):
             label = render_internal_link(label, anchor)
         lines.append(f"{'    ' * depth}- {label}")
     return "\n".join(lines)
@@ -334,6 +348,13 @@ def _render_media_content(
     content = block.content.strip()
     if not content:
         return ""
+    return _render_embedded_markup(content, delimiters, asset_base_url)
+
+
+def _render_embedded_markup(content: str, delimiters: LatexDelimitersConfig, asset_base_url: str) -> str:
+    """输出嵌入 HTML；纯 Markdown 模式将其降级为 GFM。"""
+    if is_pure_markdown():
+        return html_to_pure_markdown(prefix_html_image_sources(content, asset_base_url), delimiters)
     return format_embedded_html(content, asset_base_url=asset_base_url, delimiters=delimiters)
 
 
@@ -388,12 +409,14 @@ def _render_chart_content(
     )
     if html_table is not None:
         return html_table
-    return format_embedded_html(normalized, asset_base_url=asset_base_url, delimiters=delimiters)
+    return _render_embedded_markup(normalized, delimiters, asset_base_url)
 
 
 def _render_details(content: str, summary: str) -> str:
-    """构造保留已渲染视觉内容的折叠 HTML 详情块。"""
+    """构造保留已渲染视觉内容的折叠 HTML 详情块；纯 Markdown 展开为粗体标题加正文。"""
     safe_summary = html.escape(summary, quote=False)
+    if is_pure_markdown():
+        return f"**{escape_conservative_markdown_text(safe_summary)}**\n\n{content.strip()}"
     return f"<details>\n<summary>{safe_summary}</summary>\n\n{content.strip()}\n</details>"
 
 
@@ -571,6 +594,8 @@ def _render_code_body(
     if block.sub_type == RAW_ALGORITHM:
         if not isinstance(child, AlgorithmBodyBlock):
             raise TypeError("algorithm subtype requires AlgorithmBodyBlock")
+        if is_pure_markdown():
+            return _render_algorithm_fenced(child.content, delimiters)
         return _render_algorithm_html(child.content, delimiters)
     return _render_code_semantic_content(block, child, delimiters)
 
@@ -623,6 +648,33 @@ def _render_algorithm_html(content: list[InlineSpan], delimiters: LatexDelimiter
     if not body.strip():
         return ""
     return f'<div class="docvortex-algorithm" style="white-space: pre-wrap; font-family:monospace;">\n{body}\n</div>'
+
+
+def _render_algorithm_fenced(content: list[InlineSpan], delimiters: LatexDelimitersConfig) -> str:
+    """纯 Markdown 中用围栏代码保留算法空白与缩进，样式退化为纯文字。"""
+    parts: list[str] = []
+    previous_equation = False
+    for span in content:
+        current_equation = isinstance(span, EquationInlineSpan)
+        if previous_equation and current_equation:
+            parts.append(" ")
+        parts.append(_plain_span_text(span, delimiters))
+        previous_equation = current_equation
+    body = "".join(parts)
+    if not body.strip():
+        return ""
+    return _render_fenced_content(body)
+
+
+def _plain_span_text(span: InlineSpan, delimiters: LatexDelimitersConfig) -> str:
+    """提取行内 Span 的可见文字，公式保留定界符。"""
+    if isinstance(span, (TextSpan, CodeInlineSpan)):
+        return span.content
+    if isinstance(span, EquationInlineSpan):
+        return f"{delimiters.inline.left}{span.content}{delimiters.inline.right}"
+    if isinstance(span, HyperlinkSpan):
+        return "".join(_plain_span_text(child, delimiters) for child in span.content)
+    raise TypeError(f"Unsupported inline span: {type(span).__name__}")
 
 
 def _render_algorithm_markdown(content: list[InlineSpan], delimiters: LatexDelimitersConfig) -> str:

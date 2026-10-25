@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from ....content.inline import join_inline_spans
 from ....options import LatexDelimitersConfig
 from ....schema import CodeInlineSpan, EquationInlineSpan, HyperlinkSpan, InlineSpan, TextSpan
+from .dialect import is_pure_markdown
 from .escaping import escape_conservative_markdown_text
 
 _HTML_LIKE_TEXT_RE = re.compile(r"</?[A-Za-z][^<>\n]*>|<!--.*?-->|<![A-Za-z][^<>\n]*>|<\?[^<>\n]*\?>")
@@ -19,6 +20,7 @@ _SIMPLE_STYLE_WRAPPERS = {
     frozenset({"strikethrough"}): "~~",
     frozenset({"bold", "italic"}): "***",
 }
+_EMPHASIS_STYLES = frozenset({"bold", "italic"})
 
 
 def render_inline_content(content: list[InlineSpan], delimiters: LatexDelimitersConfig) -> str:
@@ -52,7 +54,8 @@ def _render_inline_span(span: InlineSpan, delimiters: LatexDelimitersConfig) -> 
         return f"{delimiters.inline.left}{span.content}{delimiters.inline.right}"
     if isinstance(span, HyperlinkSpan):
         label = render_inline_spans(list(span.content), delimiters)
-        return _render_link(label, span.url, _requires_html_link(list(span.content)))
+        use_html = not is_pure_markdown() and _requires_html_link(list(span.content))
+        return _render_link(label, span.url, use_html)
     raise TypeError(f"Unsupported inline span: {type(span).__name__}")
 
 
@@ -175,11 +178,27 @@ def _apply_style_wrappers(
     if not core:
         return content
 
+    if is_pure_markdown():
+        return f"{leading}{_wrap_pure_markdown_styles(core, styles)}{trailing}"
     style_key = frozenset(styles)
     wrapper = _SIMPLE_STYLE_WRAPPERS.get(style_key)
     if wrapper is not None and not force_html:
         return f"{leading}{wrapper}{core}{wrapper}{trailing}"
     return f"{leading}{_apply_html_styles(core, styles)}{trailing}"
+
+
+def _wrap_pure_markdown_styles(content: str, styles: Sequence[str]) -> str:
+    """只保留 GFM 可表达的粗体、斜体与删除线；上下标用 ^ / _ 前缀标记，其余视觉样式退化为纯文字。"""
+    # 前缀不随内容变化，下游可通过探针模板定位文字边界。
+    if "superscript" in styles:
+        content = f"^{content}"
+    elif "subscript" in styles:
+        content = f"\\_{content}"
+    wrapper = _SIMPLE_STYLE_WRAPPERS.get(frozenset(styles) & _EMPHASIS_STYLES, "")
+    content = f"{wrapper}{content}{wrapper}"
+    if "strikethrough" in styles:
+        content = f"~~{content}~~"
+    return content
 
 
 def render_styled_markdown_text(content: str, styles: Sequence[str]) -> str:
@@ -193,7 +212,12 @@ def markdown_styles_require_html(styles: Sequence[str]) -> bool:
 
 
 def _render_visible_whitespace(content: str, styles: Sequence[str]) -> str:
-    """使用原 HTML 规则保留非 ASCII marker 场景的可见空白。"""
+    """使用原 HTML 规则保留非 ASCII marker 场景的可见空白；纯 Markdown 改用 marker 字符。"""
+    if is_pure_markdown():
+        marker = _get_visible_space_marker(styles)
+        if marker is None:
+            return content
+        return "".join(char if char == "\n" else marker for char in content.expandtabs(4))
     visible = "".join("<br>" if char == "\n" else "&nbsp;" for char in content.expandtabs(4))
     return _apply_html_styles(visible, styles)
 
@@ -231,6 +255,9 @@ def _render_link(label: str, url: str, use_html: bool) -> str:
     if not label:
         return ""
     if not url or url == ".":
+        return label
+    if is_pure_markdown() and url.startswith("#"):
+        # 纯 Markdown 不输出 HTML anchor，文档内书签链接无法解析。
         return label
     if use_html:
         return f'<a href="{html.escape(url, quote=True)}">{label}</a>'

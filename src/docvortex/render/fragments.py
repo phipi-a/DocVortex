@@ -7,11 +7,20 @@ from ..schema import ImagePayloadBlock, InlineSpan
 from ._internal.common.list_items import ListItem, ListItemKind, OrderedListStyle
 
 
-def render_inline_content(content: list[InlineSpan], delimiters: LatexDelimitersConfig) -> str:
-    """将行内语义编码为 Markdown，沿用共享的样式与公式规则。"""
+def render_inline_content(
+    content: list[InlineSpan],
+    delimiters: LatexDelimitersConfig,
+    *,
+    pure_markdown: bool = False,
+) -> str:
+    """将行内语义编码为 Markdown，沿用共享的样式与公式规则；pure_markdown 禁止 raw HTML。"""
+    from ._internal.markdown.dialect import markdown_dialect
     from ._internal.markdown.inline import render_inline_content as render_value
 
-    return render_value(content, delimiters)
+    if not isinstance(pure_markdown, bool):
+        raise TypeError("pure_markdown must be a bool")
+    with markdown_dialect(pure=pure_markdown):
+        return render_value(content, delimiters)
 
 
 def render_internal_link(label: str, anchor: str) -> str:

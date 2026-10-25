@@ -2,24 +2,32 @@
 
 Use `render_markdown(document, pure_markdown=True)` or
 `MarkdownRenderOptions(pure_markdown=True)` with the shared render API.
-The default remains HTML-enhanced Markdown.
+`render_single_block(..., pure_markdown=True)` and
+`docvortex.render.fragments.render_inline_content(..., pure_markdown=True)`
+select the same dialect for partial rendering. The default remains
+HTML-enhanced Markdown.
 
-The HTML-free variant uses GFM tables and strikethrough. HTML bold, emphasis,
-links, and images become Markdown syntax. Underlining, super/subscripts, colors,
-and emphasis dots retain their text without their visual styling. Page footnotes
-remain visible text. Details are expanded with a visible summary. Algorithm and
-preformatted blocks become fenced code. Complex tables become rectangular GFM
-tables with blank cells in place of merged cell spans; nested tables are flattened.
-HTML anchor targets are removed, so links to custom anchors may no longer resolve.
+The renderer emits the HTML-free dialect directly; there is no post-processing
+pass. Output is GFM (tables and strikethrough) without raw HTML blocks or inline
+HTML. Rendering blocks one by one and joining them with blank lines yields the
+same text as rendering the whole document, so callers can derive source maps
+from the public render functions.
 
-Literal HTML inside code blocks, inline code, and formulas is preserved as literal
-content. Relative image paths are retained. The converter does not fetch remote
-images or turn remote resources into local files.
+| Source feature | HTML-free output |
+| --- | --- |
+| bold, italic, strikethrough and their combinations | `**`, `*`, `~~` (for example `~~**x**~~`) |
+| underline, emphasis dots | text only |
+| superscript / subscript | `^x` / `_x` prefix (`10^-3`, `H_2O`) |
+| styled whitespace (form gaps) | `_` (underline) or `-` (strikethrough) per character |
+| hyperlinks with complex label styles | `[label](url)` with the representable styles |
+| bookmark anchors, links to `#anchor`, index links | omitted; the link label remains as text |
+| page footnotes | plain paragraph |
+| image / chart details | expanded: bold summary followed by the content |
+| algorithms | fenced code block with plain text and delimited formulas |
+| simple tables | GFM table (unchanged from the default dialect) |
+| complex tables | rectangular GFM table: merged cells keep content in the first cell and leave the others blank; line breaks and block content become spaces, list items are joined with `; `, nested tables are flattened to text |
+| other embedded HTML | known structure becomes Markdown (paragraphs, headings, lists with their start number, `pre` as fenced code, images, links, formulas); unknown tags keep their text; scripts, styles, forms, embeds and comments are dropped |
 
-`docvortex.render.pure_markdown.convert_to_pure_markdown(markdown)` returns a
-`PureMarkdown` containing the converted string and an ordered tuple of
-`MarkdownEdit` replacements. Positions refer to Unicode codepoints in the input.
-`translate_range(start, end)` maps source ranges to output ranges. Edits flagged
-`coarse` replace an entire structure; downstream source maps must discard finer
-ownership claims inside those structures rather than inventing word positions.
-`coarsens_range(start, end)` checks for such a replacement using the source range.
+Literal text that looks like HTML is emitted as entities (`&lt;div&gt;`), which
+CommonMark renders as text. Relative image paths are retained; remote images
+are not fetched.
