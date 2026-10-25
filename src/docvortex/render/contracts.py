@@ -64,11 +64,14 @@ class MarkdownRenderOptions:
     mode: RenderMode = RenderMode.DEFAULT
     asset_base_url: str = ""
     image_renderer: ImageRenderer | None = None
+    pure_markdown: bool = False
 
     def __post_init__(self) -> None:
         """在构造时拒绝不符合严格公共契约的选项值。"""
         _validate_mode(self.mode)
         _validate_asset_base_url(self.asset_base_url)
+        if not isinstance(self.pure_markdown, bool):
+            raise TypeError("pure_markdown must be a bool")
         if self.image_renderer is not None and not callable(self.image_renderer):
             raise TypeError("image_renderer must be callable or None")
 

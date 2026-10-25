@@ -14,17 +14,23 @@ def render_markdown(
     asset_base_url: str = "",
     image_renderer: ImageRenderer | None = None,
     latex_delimiters: LatexDelimitersConfig | None = None,
+    pure_markdown: bool = False,
 ) -> str:
     """惰性加载 Markdown 实现并渲染严格 MiddleJson。"""
     from ._internal.markdown.renderer import render_markdown as _render_markdown
 
-    return _render_markdown(
+    markdown = _render_markdown(
         middle_json,
         latex_delimiters=latex_delimiters,
         mode=mode,
         asset_base_url=asset_base_url,
         image_renderer=image_renderer,
     )
+    if pure_markdown:
+        from .pure_markdown import convert_to_pure_markdown
+
+        return convert_to_pure_markdown(markdown).markdown
+    return markdown
 
 
 def render_single_block(
