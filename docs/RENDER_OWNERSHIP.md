@@ -23,6 +23,7 @@ are owned by MinerU.
 | Operation | Purpose |
 | --- | --- |
 | `render_inline_content` | Inline Markdown with explicit formula delimiters |
+| `trace_inline_content` | The same inline Markdown with each emission's source span and characters |
 | `render_internal_link` | Escaped internal Markdown links |
 | `resolve_image_source` | Existing image source precedence |
 | `normalize_image_source` | Shared image path/URL normalization |
@@ -31,6 +32,12 @@ are owned by MinerU.
 | `parse_list_item_marker` | Parse list markers without losing inline styling |
 
 `ListItem`, `ListItemKind` and `OrderedListStyle` describe list-parser results.
+`trace_inline_content` returns `TracedInlineContent`: `emissions` tile the
+output in order, each naming the span path (content index, plus child index
+inside a hyperlink) and, for leaf characters, the rendered source range including
+its escapes. Wrappers (styles, formula delimiters, code fences, link syntax) have
+no source range. `source_range` and `span_range` answer the common lookups; the
+plain renderer joins the same pieces, so traces cannot drift from the output.
 These functions delegate to the existing shared implementation rather than
 maintaining copies. The public module is lightweight; renderer dependencies are
 loaded on use. MinerU's Content List code imports only public DocVortex interfaces.

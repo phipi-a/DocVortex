@@ -9,9 +9,11 @@ TEXT_BLOCK_MARKDOWN_PREFIX_RE = re.compile(r"^(?P<indent>[ \t]{0,3})(?P<marker>#
 # DONE in render
 def escape_conservative_markdown_text(content: str) -> str:
     """Escape plain-text characters that carry inline Markdown semantics."""
-    if not content:
-        return content
+    return "".join(conservative_markdown_escapes(content))
 
+
+def conservative_markdown_escapes(content: str) -> list[str]:
+    """Return the escaped emission of each source character, in order."""
     escaped_chars = []
     preceding_backslashes = 0
 
@@ -22,12 +24,12 @@ def escape_conservative_markdown_text(content: str) -> str:
             continue
 
         if char in CONSERVATIVE_MARKDOWN_SPECIAL_CHARS and preceding_backslashes % 2 == 0:
-            escaped_chars.append("\\")
-
-        escaped_chars.append(char)
+            escaped_chars.append(f"\\{char}")
+        else:
+            escaped_chars.append(char)
         preceding_backslashes = 0
 
-    return "".join(escaped_chars)
+    return escaped_chars
 
 
 # DONE in render
